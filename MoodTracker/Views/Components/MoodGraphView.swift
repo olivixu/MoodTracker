@@ -138,12 +138,14 @@ struct GraphGrid: View {
     }
 
     private func yPosition(for mood: Double, height: CGFloat) -> CGFloat {
+        guard height > 0 else { return 0 }
         let normalized = (mood - TimeSlotHelper.moodMin) / (TimeSlotHelper.moodMax - TimeSlotHelper.moodMin)
         return height * (1 - normalized)
     }
 
     private func xPosition(for slot: Int, width: CGFloat) -> CGFloat {
-        width * CGFloat(slot) / CGFloat(totalSlots)
+        guard width > 0 else { return 0 }
+        return width * CGFloat(slot) / CGFloat(totalSlots)
     }
 }
 
@@ -162,10 +164,7 @@ struct MoodPath: View {
             Path { path in
                 guard !dataPoints.isEmpty else { return }
 
-                path.move(to: dataPoints[0])
-                for point in dataPoints.dropFirst() {
-                    path.addLine(to: point)
-                }
+                createSmoothPath(in: &path, through: dataPoints)
                 // Close the path to bottom
                 path.addLine(to: CGPoint(x: dataPoints.last!.x, y: size.height))
                 path.addLine(to: CGPoint(x: dataPoints[0].x, y: size.height))
@@ -178,17 +177,18 @@ struct MoodPath: View {
                     endPoint: .bottom
                 )
             )
+            .animation(nil, value: dataPoints)
+            .drawingGroup()
 
             // Line
             Path { path in
                 guard !dataPoints.isEmpty else { return }
 
-                path.move(to: dataPoints[0])
-                for point in dataPoints.dropFirst() {
-                    path.addLine(to: point)
-                }
+                createSmoothPath(in: &path, through: dataPoints)
             }
             .stroke(Color.blue, lineWidth: 2.5)
+            .animation(nil, value: dataPoints)
+            .drawingGroup()
 
             // Data point dots
             ForEach(Array(dataPoints.enumerated()), id: \.offset) { _, point in
@@ -200,7 +200,80 @@ struct MoodPath: View {
         }
     }
 
+    private func createSmoothPath(in path: inout Path, through points: [CGPoint]) {
+        guard points.count > 0 else { return }
+
+        path.move(to: points[0])
+
+        if points.count == 1 {
+            return
+        }
+
+        if points.count == 2 {
+            path.addLine(to: points[1])
+            return
+        }
+
+        // Use Centripetal Catmull-Rom (alpha = 0.5) for smooth curves through points
+        // This guarantees no loops or overshoots
+        let alpha: CGFloat = 0.5  // Centripetal parameterization
+
+        // Add ghost points at start and end for proper curve boundaries
+        var extendedPoints: [CGPoint] = []
+
+        // Ghost point before first (extrapolate backward)
+        let ghostStart = points[0] + (points[0] - points[1])
+        extendedPoints.append(ghostStart)
+
+        // Add all actual points
+        extendedPoints.append(contentsOf: points)
+
+        // Ghost point after last (extrapolate forward)
+        let ghostEnd = points[points.count - 1] + (points[points.count - 1] - points[points.count - 2])
+        extendedPoints.append(ghostEnd)
+
+        // Draw Catmull-Rom segments
+        for i in 0..<points.count - 1 {
+            let p0 = extendedPoints[i]
+            let p1 = extendedPoints[i + 1]
+            let p2 = extendedPoints[i + 2]
+            let p3 = extendedPoints[i + 3]
+
+            addCatmullRomSegment(to: &path, p0: p0, p1: p1, p2: p2, p3: p3, alpha: alpha)
+        }
+    }
+
+    private func addCatmullRomSegment(
+        to path: inout Path,
+        p0: CGPoint, p1: CGPoint, p2: CGPoint, p3: CGPoint,
+        alpha: CGFloat
+    ) {
+        // Calculate knot intervals using centripetal parameterization
+        let t0: CGFloat = 0.0
+        let t1 = t0 + pow(p1.distance(to: p0), alpha)
+        let t2 = t1 + pow(p2.distance(to: p1), alpha)
+        let t3 = t2 + pow(p3.distance(to: p2), alpha)
+
+        // Handle degenerate cases
+        guard t1 != t0 && t2 != t1 && t3 != t2 else {
+            path.addLine(to: p2)
+            return
+        }
+
+        // Calculate tangents at p1 and p2
+        let m1 = ((p1 - p0) / (t1 - t0) - (p2 - p0) / (t2 - t0) + (p2 - p1) / (t2 - t1)) * (t2 - t1)
+        let m2 = ((p2 - p1) / (t2 - t1) - (p3 - p1) / (t3 - t1) + (p3 - p2) / (t3 - t2)) * (t2 - t1)
+
+        // Convert to cubic Bezier control points
+        let cp1 = p1 + m1 / 3.0
+        let cp2 = p2 - m2 / 3.0
+
+        path.addCurve(to: p2, control1: cp1, control2: cp2)
+    }
+
     private var dataPoints: [CGPoint] {
+        guard size.width > 0 && size.height > 0 else { return [] }
+
         var points: [CGPoint] = []
 
         // Add all saved entries
@@ -238,5 +311,31 @@ struct TimeIndicator: View {
             path.addLine(to: CGPoint(x: x, y: size.height))
         }
         .stroke(Color.red.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [5, 5]))
+    }
+}
+
+// MARK: - CGPoint Extensions for Catmull-Rom
+
+extension CGPoint {
+    static func - (lhs: CGPoint, rhs: CGPoint) -> CGPoint {
+        return CGPoint(x: lhs.x - rhs.x, y: lhs.y - rhs.y)
+    }
+
+    static func + (lhs: CGPoint, rhs: CGPoint) -> CGPoint {
+        return CGPoint(x: lhs.x + rhs.x, y: lhs.y + rhs.y)
+    }
+
+    static func * (point: CGPoint, scalar: CGFloat) -> CGPoint {
+        return CGPoint(x: point.x * scalar, y: point.y * scalar)
+    }
+
+    static func / (point: CGPoint, scalar: CGFloat) -> CGPoint {
+        return CGPoint(x: point.x / scalar, y: point.y / scalar)
+    }
+
+    func distance(to point: CGPoint) -> CGFloat {
+        let dx = x - point.x
+        let dy = y - point.y
+        return sqrt(dx * dx + dy * dy)
     }
 }

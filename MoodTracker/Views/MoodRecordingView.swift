@@ -30,6 +30,7 @@ struct MoodRecordingView: View {
                             .foregroundColor(Color.moodColor(for: moodManager.currentMoodValue))
                             .monospacedDigit()
                             .contentTransition(.numericText())
+                            .animation(nil, value: moodManager.currentMoodValue)
                         Text(TimeSlotHelper.timeString(for: moodManager.currentTimeSlot))
                             .font(.subheadline)
                             .foregroundColor(.secondary)
@@ -40,6 +41,7 @@ struct MoodRecordingView: View {
                 .padding()
                 .background(Color.moodColor(for: moodManager.currentMoodValue).opacity(0.1))
                 .cornerRadius(16)
+                .animation(nil, value: moodManager.currentMoodValue)
 
                 // Interactive graph with zoom & pan
                 GeometryReader { geometry in
@@ -196,39 +198,39 @@ struct DraggableHandle: View {
                     .stroke(Color.white, lineWidth: 3)
             )
             .shadow(color: handleColor.opacity(0.5), radius: isDragging ? 12 : 6, x: 0, y: 2)
+            .animation(nil, value: moodValue)
             .scaleEffect(isDragging ? 1.2 : 1.0)
             .position(x: xPosition, y: yPosition)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isDragging)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        withAnimation(.interactiveSpring()) {
-                            isDragging = true
-                        }
+                        isDragging = true
                         // Clamp Y position to stay within graph bounds
                         let clampedY = max(0, min(geometrySize.height, value.location.y))
                         let newMood = moodForYPosition(clampedY)
                         onDragChange(newMood)
                     }
                     .onEnded { _ in
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            isDragging = false
-                        }
+                        isDragging = false
                         onDragEnd()
                     }
             )
     }
 
     private func yPositionForMood(_ mood: Double) -> CGFloat {
+        guard geometrySize.height > 0 else { return 0 }
         let normalized = (mood - TimeSlotHelper.moodMin) / (TimeSlotHelper.moodMax - TimeSlotHelper.moodMin)
         return geometrySize.height * (1 - normalized)
     }
 
     private func xPositionForTimeSlot(_ slot: Int) -> CGFloat {
+        guard geometrySize.width > 0 else { return 0 }
         return geometrySize.width * CGFloat(slot) / CGFloat(totalSlots)
     }
 
     private func moodForYPosition(_ y: CGFloat) -> Double {
+        guard geometrySize.height > 0 else { return 0 }
         let normalized = 1 - (y / geometrySize.height)
         let mood = normalized * (TimeSlotHelper.moodMax - TimeSlotHelper.moodMin) + TimeSlotHelper.moodMin
         return TimeSlotHelper.clampMood(mood)
